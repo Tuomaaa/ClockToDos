@@ -381,6 +381,7 @@ const USER = 'Tuostmm';
 const PASS = 'Tuoma114514';
 const TOPIC = 'tomacat/todo';
 const TOPIC_SETTINGS = 'tomacat/settings';
+const TOPIC_EVENTS = 'tomacat/events';
 
 let todos = [];
 let client = null;
@@ -726,6 +727,21 @@ function renderEvents() {
         </div>
       </div>`;
   }).join('');
+
+  // Publish events to MQTT for ESP32
+  publishEvents(all);
+}
+
+function publishEvents(events) {
+  if (!client || !client.connected) return;
+  const compact = events.slice(0, 12).map(ev => ({
+    t: ev.text.substring(0, 30),
+    d: ev.date ? Math.floor(ev.ts / 1000) : 0,
+    s: ev.source === 'gradescope' ? 'g' : 'm',
+    c: ev.course ? ev.course.substring(0, 20) : '',
+    x: checkedEvents[eventKey(ev)] ? 1 : 0
+  }));
+  client.publish(TOPIC_EVENTS, JSON.stringify(compact), { qos: 1, retain: true });
 }
 
 // === Gradescope ===
