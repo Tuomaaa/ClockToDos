@@ -540,12 +540,15 @@ function loadMoodle() {
 
 async function fetchMoodle(url) {
   const status = document.getElementById('moodleStatus');
-  const worker = getWorkerUrl();
-  if (!worker) { status.textContent = 'Set Worker URL first'; return; }
-
   status.textContent = 'Fetching...';
+
+  const worker = getWorkerUrl();
+  const fetchUrl = worker
+    ? worker + '/moodle?url=' + encodeURIComponent(url)
+    : 'https://corsproxy.io/?' + encodeURIComponent(url);
+
   try {
-    const resp = await fetch(worker + '/moodle?url=' + encodeURIComponent(url));
+    const resp = await fetch(fetchUrl);
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const text = await resp.text();
     moodleEvents = parseICal(text);
