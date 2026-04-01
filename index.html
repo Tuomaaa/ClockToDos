@@ -598,25 +598,48 @@ function parseICalDate(str) {
   return new Date(iso);
 }
 
+// === Checked events tracking ===
+let checkedEvents = JSON.parse(localStorage.getItem('checkedEvents') || '{}');
+
+function eventKey(ev) {
+  return ev.source + ':' + ev.text + ':' + ev.ts;
+}
+
+function toggleEvent(key) {
+  if (checkedEvents[key]) {
+    delete checkedEvents[key];
+  } else {
+    checkedEvents[key] = true;
+  }
+  localStorage.setItem('checkedEvents', JSON.stringify(checkedEvents));
+  renderEvents();
+}
+
 function renderEvents() {
   const list = document.getElementById('eventsList');
   const label = document.getElementById('eventsLabel');
 
-  // Merge moodle + gradescope events, only upcoming
   const all = [];
   const now = Date.now();
+  const oneWeek = now + 7 * 24 * 60 * 60 * 1000;
 
   for (const ev of moodleEvents) {
     all.push({ text: ev.text, date: ev.date, ts: ev.date.getTime(), source: 'moodle' });
   }
 
   for (const a of gsAssignments) {
-    if (a.dueTs && a.dueTs < now) continue; // skip past
+    if (a.dueTs && a.dueTs < now) continue;       // skip past
+    if (a.dueTs && a.dueTs > oneWeek) continue;   // only next 7 days
     all.push({ text: a.name, course: a.course, date: a.dueTs ? new Date(a.dueTs) : null, ts: a.dueTs || Infinity, source: 'gradescope' });
   }
 
-  // Sort by time
-  all.sort((a, b) => a.ts - b.ts);
+  // Sort: unchecked by time first, then checked at bottom
+  all.sort((a, b) => {
+    const aChecked = checkedEvents[eventKey(a)] ? 1 : 0;
+    const bChecked = checkedEvents[eventKey(b)] ? 1 : 0;
+    if (aChecked !== bChecked) return aChecked - bChecked;
+    return a.ts - b.ts;
+  });
 
   if (all.length === 0) {
     label.style.display = 'none';
@@ -627,6 +650,8 @@ function renderEvents() {
   label.style.display = 'block';
 
   list.innerHTML = all.map((ev, i) => {
+    const key = eventKey(ev);
+    const checked = checkedEvents[key];
     const hours = ev.ts !== Infinity ? (ev.ts - now) / (1000 * 60 * 60) : null;
     let dueClass = '';
     if (hours !== null && hours < 0) dueClass = 'overdue';
@@ -640,7 +665,12 @@ function renderEvents() {
     const subtitle = ev.course ? escapeHtml(ev.course) + ' · ' + dateStr : dateStr;
 
     return `
-      <div class="todo-item moodle-event" style="animation-delay: ${i * 0.05}s; border-left-color: ${borderColor};">
+      <div class="todo-item moodle-event ${checked ? 'done' : ''}" style="animation-delay: ${i * 0.05}s; border-left-color: ${borderColor};">
+        <div class="todo-check" onclick="toggleEvent('${key.replace(/'/g, "\\'")}')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+        </div>
         <div style="flex:1">
           <span class="todo-text">${escapeHtml(ev.text)}</span><br>
           <span class="todo-due ${dueClass}">${subtitle}</span>
@@ -657,14 +687,18 @@ function saveGradescope() {
   const pass = document.getElementById('gsPass').value;
   if (!email || !pass) return;
   localStorage.setItem('gsEmail', email);
+  localStorage.setItem('gsPass', btoa(pass));
   fetchGradescope(email, pass);
 }
 
 function loadGradescope() {
   const email = localStorage.getItem('gsEmail');
-  if (email) {
-    document.getElementById('gsEmail').value = email;
-    // Don't auto-fetch: password not stored
+  const passB64 = localStorage.getItem('gsPass');
+  if (email) document.getElementById('gsEmail').value = email;
+  if (email && passB64) {
+    const pass = atob(passB64);
+    document.getElementById('gsPass').value = pass;
+    fetchGradescope(email, pass);
   }
 }
 
