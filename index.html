@@ -380,9 +380,11 @@ const BROKER = 'wss://69b873fc3df54b608947187aa47548bf.s1.eu.hivemq.cloud:8884/m
 const USER = 'Tuostmm';
 const PASS = 'Tuoma114514';
 const TOPIC = 'tomacat/todo';
+const TOPIC_SETTINGS = 'tomacat/settings';
 
 let todos = [];
 let client = null;
+let settingsLoaded = false;
 
 function connectMQTT() {
   client = mqtt.connect(BROKER, {
@@ -397,6 +399,7 @@ function connectMQTT() {
     document.getElementById('statusDot').classList.add('connected');
     document.getElementById('statusText').textContent = 'Connected';
     client.subscribe(TOPIC, { qos: 1 });
+    client.subscribe(TOPIC_SETTINGS, { qos: 1 });
   });
 
   client.on('offline', () => {
@@ -410,16 +413,17 @@ function connectMQTT() {
   });
 
   client.on('message', (topic, message) => {
-    if (topic === TOPIC) {
-      try {
-        const data = JSON.parse(message.toString());
-        if (Array.isArray(data)) {
-          todos = data;
-          renderTodos();
-        }
-      } catch (e) {
-        console.error('Parse error:', e);
+    try {
+      const data = JSON.parse(message.toString());
+      if (topic === TOPIC && Array.isArray(data)) {
+        todos = data;
+        renderTodos();
+      } else if (topic === TOPIC_SETTINGS && !settingsLoaded) {
+        settingsLoaded = true;
+        applySettings(data);
       }
+    } catch (e) {
+      console.error('Parse error:', e);
     }
   });
 }
@@ -427,6 +431,48 @@ function connectMQTT() {
 function publishTodos() {
   if (client && client.connected) {
     client.publish(TOPIC, JSON.stringify(todos), { qos: 1, retain: true });
+  }
+}
+
+function getSettings() {
+  return {
+    workerUrl: document.getElementById('workerUrl').value.trim(),
+    moodleUrl: document.getElementById('moodleUrl').value.trim(),
+    gsEmail: document.getElementById('gsEmail').value.trim(),
+    gsPass: btoa(document.getElementById('gsPass').value || ''),
+    checkedEvents: checkedEvents
+  };
+}
+
+function publishSettings() {
+  if (client && client.connected) {
+    client.publish(TOPIC_SETTINGS, JSON.stringify(getSettings()), { qos: 1, retain: true });
+  }
+}
+
+function applySettings(s) {
+  if (s.workerUrl) {
+    document.getElementById('workerUrl').value = s.workerUrl;
+    localStorage.setItem('workerUrl', s.workerUrl);
+  }
+  if (s.moodleUrl) {
+    document.getElementById('moodleUrl').value = s.moodleUrl;
+    localStorage.setItem('moodleUrl', s.moodleUrl);
+    fetchMoodle(s.moodleUrl);
+  }
+  if (s.gsEmail) {
+    document.getElementById('gsEmail').value = s.gsEmail;
+    localStorage.setItem('gsEmail', s.gsEmail);
+  }
+  if (s.gsPass) {
+    const pass = atob(s.gsPass);
+    document.getElementById('gsPass').value = pass;
+    localStorage.setItem('gsPass', s.gsPass);
+    if (s.gsEmail && pass) fetchGradescope(s.gsEmail, pass);
+  }
+  if (s.checkedEvents) {
+    checkedEvents = s.checkedEvents;
+    localStorage.setItem('checkedEvents', JSON.stringify(checkedEvents));
   }
 }
 
@@ -510,6 +556,7 @@ function getWorkerUrl() {
 function saveWorker() {
   const url = document.getElementById('workerUrl').value.trim();
   localStorage.setItem('workerUrl', url);
+  publishSettings();
 }
 
 function loadWorker() {
@@ -524,6 +571,7 @@ function saveMoodle() {
   const url = document.getElementById('moodleUrl').value.trim();
   if (!url) return;
   localStorage.setItem('moodleUrl', url);
+  publishSettings();
   fetchMoodle(url);
 }
 
@@ -612,6 +660,7 @@ function toggleEvent(key) {
     checkedEvents[key] = true;
   }
   localStorage.setItem('checkedEvents', JSON.stringify(checkedEvents));
+  publishSettings();
   renderEvents();
 }
 
@@ -688,6 +737,7 @@ function saveGradescope() {
   if (!email || !pass) return;
   localStorage.setItem('gsEmail', email);
   localStorage.setItem('gsPass', btoa(pass));
+  publishSettings();
   fetchGradescope(email, pass);
 }
 
