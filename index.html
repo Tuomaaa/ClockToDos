@@ -346,17 +346,36 @@
 <div class="section-label" id="moodleLabel" style="display:none">Moodle Calendar</div>
 <div class="todo-list" id="moodleList"></div>
 
+<div class="section-label" id="gsLabel" style="display:none">Gradescope</div>
+<div class="todo-list" id="gsList"></div>
+
 <div class="settings-toggle">
   <button onclick="toggleSettings()">Settings</button>
 </div>
 
 <div class="settings-panel" id="settingsPanel">
+  <label>Worker URL</label>
+  <div class="moodle-row" style="margin-bottom:14px">
+    <input type="text" id="workerUrl" placeholder="https://your-worker.workers.dev">
+    <button onclick="saveWorker()">Save</button>
+  </div>
+
   <label>Moodle iCal URL</label>
   <div class="moodle-row">
     <input type="text" id="moodleUrl" placeholder="https://moodle.rose-hulman.edu/calendar/export...">
     <button onclick="saveMoodle()">Sync</button>
   </div>
   <div class="moodle-status" id="moodleStatus"></div>
+
+  <label style="margin-top:14px">Gradescope</label>
+  <div class="moodle-row" style="margin-bottom:6px">
+    <input type="text" id="gsEmail" placeholder="Email">
+  </div>
+  <div class="moodle-row">
+    <input type="password" id="gsPass" placeholder="Password">
+    <button onclick="saveGradescope()">Sync</button>
+  </div>
+  <div class="moodle-status" id="gsStatus"></div>
 </div>
 
 <script>
@@ -486,8 +505,22 @@ function toggleSettings() {
   document.getElementById('settingsPanel').classList.toggle('open');
 }
 
+// === Worker URL ===
+function getWorkerUrl() {
+  return localStorage.getItem('workerUrl') || '';
+}
+
+function saveWorker() {
+  const url = document.getElementById('workerUrl').value.trim();
+  localStorage.setItem('workerUrl', url);
+}
+
+function loadWorker() {
+  const url = localStorage.getItem('workerUrl');
+  if (url) document.getElementById('workerUrl').value = url;
+}
+
 // === Moodle iCal ===
-const CORS_PROXY = 'https://corsproxy.io/?';
 let moodleEvents = [];
 
 function saveMoodle() {
@@ -507,10 +540,12 @@ function loadMoodle() {
 
 async function fetchMoodle(url) {
   const status = document.getElementById('moodleStatus');
-  status.textContent = 'Fetching...';
+  const worker = getWorkerUrl();
+  if (!worker) { status.textContent = 'Set Worker URL first'; return; }
 
+  status.textContent = 'Fetching...';
   try {
-    const resp = await fetch(CORS_PROXY + encodeURIComponent(url));
+    const resp = await fetch(worker + '/moodle?url=' + encodeURIComponent(url));
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const text = await resp.text();
     moodleEvents = parseICal(text);
@@ -540,26 +575,22 @@ function parseICal(text) {
   }
 
   events.sort((a, b) => a.date - b.date);
-  return events.slice(0, 20); // limit to 20 upcoming
+  return events.slice(0, 20);
 }
 
 function extractField(block, field) {
-  // Handle both "FIELD:" and "FIELD;...:" formats
   const regex = new RegExp('^' + field + '[;:](.*)$', 'm');
   const match = block.match(regex);
   if (!match) return null;
   let val = match[1];
-  // If format is "PARAM:VALUE", extract after last unescaped colon
   if (match[0].indexOf(';') > -1) {
     const colonIdx = val.indexOf(':');
     if (colonIdx > -1) val = val.substring(colonIdx + 1);
   }
-  // Unfold continuation lines
   return val.replace(/\r?\n[ \t]/g, '').trim();
 }
 
 function parseICalDate(str) {
-  // Format: 20250415T235900Z or 20250415T235900
   const clean = str.replace(/[^0-9T]/g, '');
   const m = clean.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/);
   if (!m) return null;
@@ -601,9 +632,87 @@ function renderMoodle() {
   }).join('');
 }
 
+// === Gradescope ===
+let gsAssignments = [];
+
+function saveGradescope() {
+  const email = document.getElementById('gsEmail').value.trim();
+  const pass = document.getElementById('gsPass').value;
+  if (!email || !pass) return;
+  localStorage.setItem('gsEmail', email);
+  fetchGradescope(email, pass);
+}
+
+function loadGradescope() {
+  const email = localStorage.getItem('gsEmail');
+  if (email) {
+    document.getElementById('gsEmail').value = email;
+    // Don't auto-fetch: password not stored
+  }
+}
+
+async function fetchGradescope(email, password) {
+  const status = document.getElementById('gsStatus');
+  const worker = getWorkerUrl();
+  if (!worker) { status.textContent = 'Set Worker URL first'; return; }
+
+  status.textContent = 'Logging in...';
+  try {
+    const resp = await fetch(worker + '/gradescope?email=' + encodeURIComponent(email) + '&password=' + encodeURIComponent(password));
+    const data = await resp.json();
+
+    if (data.error) throw new Error(data.error);
+
+    gsAssignments = (data.assignments || []).filter(a => {
+      if (!a.dueTs) return true;
+      return a.dueTs >= Date.now();
+    });
+
+    renderGradescope();
+    status.textContent = 'Synced: ' + data.courses + ' courses, ' + gsAssignments.length + ' upcoming';
+  } catch (e) {
+    console.error('Gradescope error:', e);
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+function renderGradescope() {
+  const list = document.getElementById('gsList');
+  const label = document.getElementById('gsLabel');
+
+  if (gsAssignments.length === 0) {
+    label.style.display = 'none';
+    list.innerHTML = '';
+    return;
+  }
+
+  label.style.display = 'block';
+  const now = Date.now();
+
+  list.innerHTML = gsAssignments.map((a, i) => {
+    let dueStr = a.due || 'No due date';
+    let dueClass = '';
+    if (a.dueTs) {
+      const hours = (a.dueTs - now) / (1000 * 60 * 60);
+      if (hours < 0) dueClass = 'overdue';
+      else if (hours < 24) dueClass = 'soon';
+    }
+
+    return `
+      <div class="todo-item moodle-event" style="animation-delay: ${i * 0.05}s; border-left-color: var(--danger);">
+        <div style="flex:1">
+          <span class="todo-text">${escapeHtml(a.name)}</span><br>
+          <span class="todo-due ${dueClass}">${escapeHtml(a.course)} · ${escapeHtml(dueStr)}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
 connectMQTT();
 renderTodos();
+loadWorker();
 loadMoodle();
+loadGradescope();
 </script>
 </body>
 </html>
