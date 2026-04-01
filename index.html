@@ -666,13 +666,10 @@ async function fetchGradescope(email, password) {
 
     if (data.error) throw new Error(data.error);
 
-    gsAssignments = (data.assignments || []).filter(a => {
-      if (!a.dueTs) return true;
-      return a.dueTs >= Date.now();
-    });
+    gsAssignments = data.assignments || [];
 
     renderGradescope();
-    status.textContent = 'Synced: ' + data.courses + ' courses, ' + gsAssignments.length + ' upcoming';
+    status.textContent = 'Synced: ' + data.courses + ' courses, ' + gsAssignments.length + ' assignments';
   } catch (e) {
     console.error('Gradescope error:', e);
     status.textContent = 'Error: ' + e.message;
