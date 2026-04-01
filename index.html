@@ -343,11 +343,8 @@
 
 <div class="todo-list" id="todoList"></div>
 
-<div class="section-label" id="moodleLabel" style="display:none">Moodle Calendar</div>
-<div class="todo-list" id="moodleList"></div>
-
-<div class="section-label" id="gsLabel" style="display:none">Gradescope</div>
-<div class="todo-list" id="gsList"></div>
+<div class="section-label" id="eventsLabel" style="display:none">Upcoming</div>
+<div class="todo-list" id="eventsList"></div>
 
 <div class="settings-toggle">
   <button onclick="toggleSettings()">Settings</button>
@@ -552,7 +549,7 @@ async function fetchMoodle(url) {
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const text = await resp.text();
     moodleEvents = parseICal(text);
-    renderMoodle();
+    renderEvents();
     status.textContent = 'Synced: ' + moodleEvents.length + ' events';
   } catch (e) {
     console.error('Moodle fetch error:', e);
@@ -601,35 +598,52 @@ function parseICalDate(str) {
   return new Date(iso);
 }
 
-function renderMoodle() {
-  const list = document.getElementById('moodleList');
-  const label = document.getElementById('moodleLabel');
+function renderEvents() {
+  const list = document.getElementById('eventsList');
+  const label = document.getElementById('eventsLabel');
 
-  if (moodleEvents.length === 0) {
+  // Merge moodle + gradescope events, only upcoming
+  const all = [];
+  const now = Date.now();
+
+  for (const ev of moodleEvents) {
+    all.push({ text: ev.text, date: ev.date, ts: ev.date.getTime(), source: 'moodle' });
+  }
+
+  for (const a of gsAssignments) {
+    if (a.dueTs && a.dueTs < now) continue; // skip past
+    all.push({ text: a.name, course: a.course, date: a.dueTs ? new Date(a.dueTs) : null, ts: a.dueTs || Infinity, source: 'gradescope' });
+  }
+
+  // Sort by time
+  all.sort((a, b) => a.ts - b.ts);
+
+  if (all.length === 0) {
     label.style.display = 'none';
     list.innerHTML = '';
     return;
   }
 
   label.style.display = 'block';
-  const now = new Date();
 
-  list.innerHTML = moodleEvents.map((ev, i) => {
-    const diff = ev.date - now;
-    const hours = diff / (1000 * 60 * 60);
+  list.innerHTML = all.map((ev, i) => {
+    const hours = ev.ts !== Infinity ? (ev.ts - now) / (1000 * 60 * 60) : null;
     let dueClass = '';
-    if (hours < 0) dueClass = 'overdue';
-    else if (hours < 24) dueClass = 'soon';
+    if (hours !== null && hours < 0) dueClass = 'overdue';
+    else if (hours !== null && hours < 24) dueClass = 'soon';
 
-    const dateStr = ev.date.toLocaleDateString('en-US', {
-      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-    });
+    const dateStr = ev.date
+      ? ev.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : 'No date';
+
+    const borderColor = ev.source === 'gradescope' ? 'var(--danger)' : 'var(--accent2)';
+    const subtitle = ev.course ? escapeHtml(ev.course) + ' · ' + dateStr : dateStr;
 
     return `
-      <div class="todo-item moodle-event" style="animation-delay: ${i * 0.05}s">
+      <div class="todo-item moodle-event" style="animation-delay: ${i * 0.05}s; border-left-color: ${borderColor};">
         <div style="flex:1">
           <span class="todo-text">${escapeHtml(ev.text)}</span><br>
-          <span class="todo-due ${dueClass}">${dateStr}</span>
+          <span class="todo-due ${dueClass}">${subtitle}</span>
         </div>
       </div>`;
   }).join('');
@@ -668,7 +682,7 @@ async function fetchGradescope(email, password) {
 
     gsAssignments = data.assignments || [];
 
-    renderGradescope();
+    renderEvents();
     status.textContent = 'Synced: ' + data.courses + ' courses, ' + gsAssignments.length + ' assignments';
   } catch (e) {
     console.error('Gradescope error:', e);
@@ -676,37 +690,6 @@ async function fetchGradescope(email, password) {
   }
 }
 
-function renderGradescope() {
-  const list = document.getElementById('gsList');
-  const label = document.getElementById('gsLabel');
-
-  if (gsAssignments.length === 0) {
-    label.style.display = 'none';
-    list.innerHTML = '';
-    return;
-  }
-
-  label.style.display = 'block';
-  const now = Date.now();
-
-  list.innerHTML = gsAssignments.map((a, i) => {
-    let dueStr = a.due || 'No due date';
-    let dueClass = '';
-    if (a.dueTs) {
-      const hours = (a.dueTs - now) / (1000 * 60 * 60);
-      if (hours < 0) dueClass = 'overdue';
-      else if (hours < 24) dueClass = 'soon';
-    }
-
-    return `
-      <div class="todo-item moodle-event" style="animation-delay: ${i * 0.05}s; border-left-color: var(--danger);">
-        <div style="flex:1">
-          <span class="todo-text">${escapeHtml(a.name)}</span><br>
-          <span class="todo-due ${dueClass}">${escapeHtml(a.course)} · ${escapeHtml(dueStr)}</span>
-        </div>
-      </div>`;
-  }).join('');
-}
 
 connectMQTT();
 renderTodos();
