@@ -213,6 +213,117 @@
     from { opacity: 0; transform: translateX(-20px); }
     to { opacity: 1; transform: translateX(0); }
   }
+
+  .settings-toggle {
+    width: 100%;
+    max-width: 420px;
+    margin-top: 24px;
+    text-align: center;
+  }
+
+  .settings-toggle button {
+    background: none;
+    border: 1px solid var(--muted);
+    border-radius: 10px;
+    color: var(--muted);
+    font-family: 'Nunito', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+  }
+
+  .settings-toggle button:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .settings-panel {
+    width: 100%;
+    max-width: 420px;
+    margin-top: 12px;
+    display: none;
+    animation: fadeUp 0.3s ease;
+  }
+
+  .settings-panel.open { display: block; }
+
+  .settings-panel label {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--muted);
+    margin-bottom: 6px;
+    display: block;
+  }
+
+  .moodle-row {
+    display: flex;
+    gap: 10px;
+  }
+
+  .moodle-row input {
+    flex: 1;
+    padding: 12px 14px;
+    border: 2px solid transparent;
+    border-radius: 12px;
+    background: var(--card);
+    color: var(--text);
+    font-family: 'Nunito', sans-serif;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .moodle-row input:focus { border-color: var(--accent2); }
+  .moodle-row input::placeholder { color: var(--muted); }
+
+  .moodle-row button {
+    padding: 12px 18px;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(135deg, var(--accent2), #4dabf7);
+    color: white;
+    font-family: 'Nunito', sans-serif;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: transform 0.15s;
+  }
+
+  .moodle-row button:active { transform: scale(0.95); }
+
+  .moodle-status {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+
+  .section-label {
+    width: 100%;
+    max-width: 420px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent2);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 20px;
+    margin-bottom: 8px;
+  }
+
+  .todo-item.moodle-event {
+    border-left: 3px solid var(--accent2);
+  }
+
+  .todo-due {
+    font-size: 11px;
+    color: var(--accent2);
+    font-weight: 700;
+  }
+
+  .todo-due.overdue { color: var(--danger); }
+  .todo-due.soon { color: #ffd43b; }
 </style>
 </head>
 <body>
@@ -231,6 +342,22 @@
 </div>
 
 <div class="todo-list" id="todoList"></div>
+
+<div class="section-label" id="moodleLabel" style="display:none">Moodle Calendar</div>
+<div class="todo-list" id="moodleList"></div>
+
+<div class="settings-toggle">
+  <button onclick="toggleSettings()">Settings</button>
+</div>
+
+<div class="settings-panel" id="settingsPanel">
+  <label>Moodle iCal URL</label>
+  <div class="moodle-row">
+    <input type="text" id="moodleUrl" placeholder="https://moodle.rose-hulman.edu/calendar/export...">
+    <button onclick="saveMoodle()">Sync</button>
+  </div>
+  <div class="moodle-status" id="moodleStatus"></div>
+</div>
 
 <script>
 const BROKER = 'wss://69b873fc3df54b608947187aa47548bf.s1.eu.hivemq.cloud:8884/mqtt';
@@ -354,8 +481,129 @@ document.getElementById('todoInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') addTodo();
 });
 
+// === Settings ===
+function toggleSettings() {
+  document.getElementById('settingsPanel').classList.toggle('open');
+}
+
+// === Moodle iCal ===
+const CORS_PROXY = 'https://corsproxy.io/?';
+let moodleEvents = [];
+
+function saveMoodle() {
+  const url = document.getElementById('moodleUrl').value.trim();
+  if (!url) return;
+  localStorage.setItem('moodleUrl', url);
+  fetchMoodle(url);
+}
+
+function loadMoodle() {
+  const url = localStorage.getItem('moodleUrl');
+  if (url) {
+    document.getElementById('moodleUrl').value = url;
+    fetchMoodle(url);
+  }
+}
+
+async function fetchMoodle(url) {
+  const status = document.getElementById('moodleStatus');
+  status.textContent = 'Fetching...';
+
+  try {
+    const resp = await fetch(CORS_PROXY + encodeURIComponent(url));
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const text = await resp.text();
+    moodleEvents = parseICal(text);
+    renderMoodle();
+    status.textContent = 'Synced: ' + moodleEvents.length + ' events';
+  } catch (e) {
+    console.error('Moodle fetch error:', e);
+    status.textContent = 'Error: ' + e.message;
+  }
+}
+
+function parseICal(text) {
+  const events = [];
+  const blocks = text.split('BEGIN:VEVENT');
+
+  for (let i = 1; i < blocks.length; i++) {
+    const block = blocks[i].split('END:VEVENT')[0];
+    const summary = extractField(block, 'SUMMARY');
+    const dtstart = extractField(block, 'DTSTART');
+
+    if (summary && dtstart) {
+      const date = parseICalDate(dtstart);
+      if (date && date >= new Date()) {
+        events.push({ text: summary, date: date });
+      }
+    }
+  }
+
+  events.sort((a, b) => a.date - b.date);
+  return events.slice(0, 20); // limit to 20 upcoming
+}
+
+function extractField(block, field) {
+  // Handle both "FIELD:" and "FIELD;...:" formats
+  const regex = new RegExp('^' + field + '[;:](.*)$', 'm');
+  const match = block.match(regex);
+  if (!match) return null;
+  let val = match[1];
+  // If format is "PARAM:VALUE", extract after last unescaped colon
+  if (match[0].indexOf(';') > -1) {
+    const colonIdx = val.indexOf(':');
+    if (colonIdx > -1) val = val.substring(colonIdx + 1);
+  }
+  // Unfold continuation lines
+  return val.replace(/\r?\n[ \t]/g, '').trim();
+}
+
+function parseICalDate(str) {
+  // Format: 20250415T235900Z or 20250415T235900
+  const clean = str.replace(/[^0-9T]/g, '');
+  const m = clean.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/);
+  if (!m) return null;
+  const iso = m[1]+'-'+m[2]+'-'+m[3]+'T'+m[4]+':'+m[5]+':'+m[6]+'Z';
+  return new Date(iso);
+}
+
+function renderMoodle() {
+  const list = document.getElementById('moodleList');
+  const label = document.getElementById('moodleLabel');
+
+  if (moodleEvents.length === 0) {
+    label.style.display = 'none';
+    list.innerHTML = '';
+    return;
+  }
+
+  label.style.display = 'block';
+  const now = new Date();
+
+  list.innerHTML = moodleEvents.map((ev, i) => {
+    const diff = ev.date - now;
+    const hours = diff / (1000 * 60 * 60);
+    let dueClass = '';
+    if (hours < 0) dueClass = 'overdue';
+    else if (hours < 24) dueClass = 'soon';
+
+    const dateStr = ev.date.toLocaleDateString('en-US', {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+
+    return `
+      <div class="todo-item moodle-event" style="animation-delay: ${i * 0.05}s">
+        <div style="flex:1">
+          <span class="todo-text">${escapeHtml(ev.text)}</span><br>
+          <span class="todo-due ${dueClass}">${dateStr}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
 connectMQTT();
 renderTodos();
+loadMoodle();
 </script>
 </body>
 </html>
